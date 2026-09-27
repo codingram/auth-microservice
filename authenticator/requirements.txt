@@ -1,5 +1,8 @@
-fastapi 
+fastapi
 uvicorn
 pyjwt
 passlib==1.7.2
 bcrypt
+sqlalchemy
+python-dotenv
+pydantic-settings

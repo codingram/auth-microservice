@@ -1,60 +1,68 @@
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
 from auth import AuthHandler
-from schemas import AuthDetails
+from schemas import AuthDetails, TokenResponse, UserResponse
+from models import User
+from database import get_db, init_db
 
 
-app = FastAPI()
-
+app = FastAPI(
+    title="Auth Microservice",
+    description="A simple authentication microservice",
+    version="1.0.0"
+)
 
 auth_handler = AuthHandler()
-users = []
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
 
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {"message": "Auth Microservice API", "version": "1.0.0"}
 
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Optional[str] = None):
-    return {"item_id": item_id, "q": q}
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 
-@app.post('/register', status_code=201)
-def register(auth_details: AuthDetails):
-    if any( x.get('username') == auth_details.username for x in users):
-        raise HTTPException(status_code=400, detail="Username already exist")
+@app.post("/register", status_code=201, response_model=UserResponse)
+def register(auth_details: AuthDetails, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.username == auth_details.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
     hashed_password = auth_handler.get_password_hash(auth_details.password)
-    users.append({
-        "username": auth_details.username,
-        "password": hashed_password
-    })
+    user = User(username=auth_details.username, password=hashed_password)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-    return 200
-
-
-@app.post('/login')
-def login(auth_details: AuthDetails):
-    user = None
-    for x in users:
-        if x.get("username") == auth_details.username:
-            user = x 
-            break
-
-    if (user is None) or (not auth_handler.verify_password(auth_details.password, user.get("password"))):
-        raise HTTPException(status_code=401, detail="Invalid username nor password")
-    token = auth_handler.encode_token(user.get("username"))
-    
-    return {"token": token}
+    return user
 
 
-@app.get('/free')
-def free():
-    return {"Hello": "World"}
+@app.post("/login", response_model=TokenResponse)
+def login(auth_details: AuthDetails, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == auth_details.username).first()
+
+    if not user or not auth_handler.verify_password(auth_details.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = auth_handler.encode_token(user.username)
+    return {"access_token": token}
 
 
-@app.get('/private')
-def private(username=Depends(auth_handler.auth_wrapper)):
-    return {"name": username}
+@app.get("/free")
+def free_endpoint():
+    return {"message": "This is a free endpoint"}
+
+
+@app.get("/private", response_model=dict)
+def private_endpoint(username: str = Depends(auth_handler.auth_wrapper)):
+    return {"message": f"Hello {username}", "username": username}
